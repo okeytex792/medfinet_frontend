@@ -166,7 +166,7 @@ function ClinicalResult({
         ) : (
           <div className={`grid gap-3 ${clinicalAllowed ? 'sm:grid-cols-3' : ''}`}>
             {clinicalAllowed ? <Link to={`${childBase}/${result.child.id}/clinical`} className="nfc-action">
-              <FileHeart size={18} /> View clinical record
+              <FileHeart size={18} /> Vaccinations &amp; certificates
             </Link> : null}
             {clinicalAllowed ? <Link to={`${childBase}/${result.child.id}/vaccination`} className="nfc-action nfc-action-primary">
               <Syringe size={18} /> Record vaccination

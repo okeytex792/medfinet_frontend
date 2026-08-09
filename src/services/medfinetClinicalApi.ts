@@ -3,6 +3,22 @@ import {
   medfinetRequest as request,
 } from './medfinetApiClient';
 
+export type VaccinationCertificateEvidence = {
+  recordId: string;
+  fingerprint: string;
+  anchorId: string;
+  status: 'DISABLED' | 'PENDING' | 'CONFIRMED' | 'UNCONFIRMED' | 'MISMATCH' | 'UNAVAILABLE';
+  queued: boolean;
+  network: string | null;
+  txId: string | null;
+  blockHeight: string | null;
+  confirmedAt: string | null;
+  explorerUrl: string | null;
+  hashIntegrity: boolean | null;
+  noteIntegrity: boolean | null;
+  chainConfirmed: boolean | null;
+};
+
 export const medfinetClinicalApi = {
   // Timeline
   getClinicalTimeline(orgId: string, childId: string) {
@@ -36,6 +52,15 @@ export const medfinetClinicalApi = {
   downloadImmunizationCertificate(orgId: string, childId: string, immunizationId: string) {
     return download(
       `/children/${encodeURIComponent(childId)}/immunizations/${encodeURIComponent(immunizationId)}/certificate`,
+      {
+        organizationId: orgId,
+        purpose: 'vaccination-certificate-download',
+      },
+    );
+  },
+  getImmunizationCertificateEvidence(orgId: string, childId: string, immunizationId: string) {
+    return request<VaccinationCertificateEvidence>(
+      `/children/${encodeURIComponent(childId)}/immunizations/${encodeURIComponent(immunizationId)}/certificate/evidence`,
       {
         organizationId: orgId,
         purpose: 'vaccination-certificate-download',

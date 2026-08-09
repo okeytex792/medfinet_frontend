@@ -1,7 +1,7 @@
-import { FormEvent, useContext, useEffect, useState } from 'react';
-import { AlertTriangle, ArrowLeft, CheckCircle2, Loader2, ShieldAlert, Syringe } from 'lucide-react';
+import { FormEvent, useContext, useEffect, useRef, useState } from 'react';
+import { AlertTriangle, ArrowLeft, Blocks, CheckCircle2, Download, ExternalLink, Loader2, RefreshCw, ShieldAlert, Syringe, X } from 'lucide-react';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import { medfinetClinicalApi } from '../../services/medfinetClinicalApi';
+import { medfinetClinicalApi, type VaccinationCertificateEvidence } from '../../services/medfinetClinicalApi';
 import UserContext from '../../contexts/UserContext';
 
 type Timeline = Awaited<ReturnType<typeof medfinetClinicalApi.getClinicalTimeline>>;
@@ -26,23 +26,144 @@ export function NfcClinicalRecordPage() {
   const { childId = '' } = useParams();
   const [timeline, setTimeline] = useState<Timeline | null>(null);
   const [error, setError] = useState('');
+  const [certificateDownloadId, setCertificateDownloadId] = useState<string | null>(null);
+  const [certificateError, setCertificateError] = useState('');
+  const [certificatePreview, setCertificatePreview] = useState<{
+    url: string;
+    filename: string;
+    label: string;
+    immunizationId: string;
+    evidence: VaccinationCertificateEvidence;
+  } | null>(null);
+  const certificatePreviewUrl = useRef<string | null>(null);
+  const certificatePageMounted = useRef(true);
+  const [certificateEvidenceBusy, setCertificateEvidenceBusy] = useState(false);
   useEffect(() => {
     if (!organizationId) return;
     medfinetClinicalApi.getClinicalTimeline(organizationId, childId)
       .then(setTimeline)
       .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : 'Could not load clinical record'));
   }, [childId, organizationId]);
+
+  useEffect(() => {
+    certificatePageMounted.current = true;
+    return () => {
+      certificatePageMounted.current = false;
+      if (certificatePreviewUrl.current) URL.revokeObjectURL(certificatePreviewUrl.current);
+    };
+  }, []);
+
+  function closeCertificatePreview() {
+    if (certificatePreviewUrl.current) URL.revokeObjectURL(certificatePreviewUrl.current);
+    certificatePreviewUrl.current = null;
+    setCertificatePreview(null);
+  }
+
+  async function viewCertificate(immunization: Timeline['immunizations'][number]) {
+    if (!organizationId) return;
+    setCertificateDownloadId(immunization.id);
+    setCertificateError('');
+    try {
+      const [{ blob, filename }, evidence] = await Promise.all([
+        medfinetClinicalApi.downloadImmunizationCertificate(
+          organizationId,
+          childId,
+          immunization.id,
+        ),
+        medfinetClinicalApi.getImmunizationCertificateEvidence(
+          organizationId,
+          childId,
+          immunization.id,
+        ),
+      ]);
+      const url = URL.createObjectURL(blob);
+      if (!certificatePageMounted.current) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      closeCertificatePreview();
+      certificatePreviewUrl.current = url;
+      setCertificatePreview({
+        url,
+        filename: filename || 'vaccination-certificate.png',
+        label: `${immunization.vaccineCode} dose ${immunization.doseNumber}`,
+        immunizationId: immunization.id,
+        evidence,
+      });
+    } catch (caught) {
+      if (certificatePageMounted.current) {
+        setCertificateError(
+          caught instanceof Error
+            ? caught.message
+            : 'Could not load the vaccination certificate',
+        );
+      }
+    } finally {
+      if (certificatePageMounted.current) setCertificateDownloadId(null);
+    }
+  }
+
+  async function refreshCertificateEvidence() {
+    if (!organizationId || !certificatePreview) return;
+    setCertificateEvidenceBusy(true);
+    setCertificateError('');
+    try {
+      const evidence = await medfinetClinicalApi.getImmunizationCertificateEvidence(
+        organizationId,
+        childId,
+        certificatePreview.immunizationId,
+      );
+      if (certificatePageMounted.current) {
+        setCertificatePreview((current) => current ? { ...current, evidence } : current);
+      }
+    } catch (caught) {
+      if (certificatePageMounted.current) {
+        setCertificateError(
+          caught instanceof Error
+            ? caught.message
+            : 'Could not refresh Algorand verification',
+        );
+      }
+    } finally {
+      if (certificatePageMounted.current) setCertificateEvidenceBusy(false);
+    }
+  }
+
   return (
-    <WorkflowShell title="Clinical record">
+    <WorkflowShell title="Vaccinations and certificates">
       {error && <p role="alert" className="rounded-xl border border-rose-300 bg-rose-50 p-4 text-rose-900">{error}</p>}
+      {certificateError && <p role="alert" className="mb-4 rounded-xl border border-rose-300 bg-rose-50 p-4 text-rose-900">{certificateError}</p>}
       {!timeline && !error && <Loader2 className="animate-spin text-cyan-700" />}
       {timeline && (
         <div className="grid gap-5 md:grid-cols-2">
           <section className="rounded-2xl border border-slate-200 bg-white p-5">
             <h2 className="text-lg font-bold">Immunizations</h2>
             <div className="mt-3 divide-y divide-slate-100">
-              {timeline.immunizations.map((item) => <div key={item.id} className="flex justify-between py-3 text-sm"><span>{item.vaccineCode} · Dose {item.doseNumber}</span><time className="text-slate-500">{new Date(item.administeredAt).toLocaleDateString()}</time></div>)}
-              {!timeline.immunizations.length && <p className="py-4 text-sm text-slate-500">No immunizations recorded.</p>}
+              {timeline.immunizations.map((item) => (
+                <div key={item.id} className="py-3 text-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="font-semibold text-slate-900">{item.vaccineCode} · Dose {item.doseNumber}</span>
+                    <time className="shrink-0 text-slate-500">{new Date(item.administeredAt).toLocaleDateString()}</time>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void viewCertificate(item)}
+                    disabled={certificateDownloadId !== null}
+                    className="mt-3 inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 font-bold text-emerald-800 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {certificateDownloadId === item.id
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <Download className="h-4 w-4" />}
+                    {certificateDownloadId === item.id ? 'Loading certificate…' : 'View certificate'}
+                  </button>
+                </div>
+              ))}
+              {!timeline.immunizations.length && (
+                <div className="py-4 text-sm text-slate-500">
+                  <p className="font-semibold text-slate-700">No immunizations recorded.</p>
+                  <p className="mt-1">A certificate becomes available after a vaccination dose is recorded.</p>
+                </div>
+              )}
             </div>
           </section>
           <section className="rounded-2xl border border-slate-200 bg-white p-5">
@@ -57,6 +178,93 @@ export function NfcClinicalRecordPage() {
             <h2 className="text-lg font-bold">Growth and appointments</h2>
             <p className="mt-2 text-sm text-slate-600">{timeline.growth.length} growth measurements · {timeline.appointments.length} appointments</p>
           </section>
+          {certificatePreview && (
+            <section className="rounded-2xl border border-emerald-200 bg-white p-4 md:col-span-2 sm:p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-bold">Vaccination certificate</h2>
+                  <p className="mt-1 text-sm text-slate-600">{certificatePreview.label}</p>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Close certificate preview"
+                  onClick={closeCertificatePreview}
+                  className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <img
+                src={certificatePreview.url}
+                alt={`Vaccination certificate for ${certificatePreview.label}`}
+                className="mx-auto mt-4 max-h-[70vh] w-auto rounded-xl border border-slate-200 shadow-sm"
+              />
+              <div className={`mt-4 rounded-xl border p-4 ${
+                certificatePreview.evidence.status === 'CONFIRMED'
+                  ? 'border-emerald-300 bg-emerald-50 text-emerald-950'
+                  : certificatePreview.evidence.status === 'MISMATCH'
+                    ? 'border-rose-300 bg-rose-50 text-rose-950'
+                    : 'border-amber-300 bg-amber-50 text-amber-950'
+              }`}>
+                <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+                  <div>
+                    <p className="flex items-center gap-2 font-bold">
+                      {certificatePreview.evidence.status === 'CONFIRMED'
+                        ? <CheckCircle2 className="h-5 w-5" />
+                        : <Blocks className="h-5 w-5" />}
+                      {certificatePreview.evidence.status === 'CONFIRMED'
+                        ? `Verified on ${certificatePreview.evidence.network || 'Algorand'}`
+                        : certificatePreview.evidence.status === 'PENDING'
+                          ? 'Algorand verification pending'
+                          : certificatePreview.evidence.status === 'DISABLED'
+                            ? 'Algorand verification is not configured'
+                            : certificatePreview.evidence.status === 'MISMATCH'
+                              ? 'Algorand proof mismatch'
+                              : 'Algorand verification is temporarily unavailable'}
+                    </p>
+                    <p className="mt-1 text-xs leading-5 opacity-80">
+                      Only a cryptographic fingerprint is anchored. No child identity or medical details are written to Algorand.
+                    </p>
+                    {certificatePreview.evidence.txId && (
+                      <p className="mt-2 break-all font-mono text-xs">
+                        Transaction: {certificatePreview.evidence.txId}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    {certificatePreview.evidence.explorerUrl && (
+                      <a
+                        href={certificatePreview.evidence.explorerUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-2 rounded-lg border border-current/20 bg-white/70 px-3 py-2 text-sm font-bold"
+                      >
+                        View on explorer <ExternalLink className="h-4 w-4" />
+                      </a>
+                    )}
+                    {certificatePreview.evidence.status !== 'DISABLED' && (
+                      <button
+                        type="button"
+                        onClick={() => void refreshCertificateEvidence()}
+                        disabled={certificateEvidenceBusy}
+                        className="inline-flex items-center gap-2 rounded-lg border border-current/20 bg-white/70 px-3 py-2 text-sm font-bold disabled:opacity-60"
+                      >
+                        <RefreshCw className={`h-4 w-4 ${certificateEvidenceBusy ? 'animate-spin' : ''}`} />
+                        Refresh proof
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <a
+                href={certificatePreview.url}
+                download={certificatePreview.filename}
+                className="mt-4 inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 font-semibold text-white hover:bg-emerald-800"
+              >
+                <Download className="h-5 w-5" /> Download PNG
+              </a>
+            </section>
+          )}
         </div>
       )}
     </WorkflowShell>
